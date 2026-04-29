@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qirabot"
-version = "0.8.0"
+version = "0.8.1"
 description = "Official Python SDK for Qirabot - AI-powered device automation"
 readme = "README.md"
 license = "MIT"

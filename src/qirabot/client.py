@@ -145,21 +145,64 @@ class Sandboxes:
         resp = self._transport.request("GET", f"/sandboxes/{sandbox_id}")
         return SandboxInfo.from_dict(resp)
 
-    def wake(self, sandbox_id: str) -> SandboxInfo:
-        """Wake a sandbox. No-op if already running."""
+    def wake(
+        self,
+        sandbox_id: str,
+        timeout: float = 120.0,
+        poll_interval: float = 3.0,
+    ) -> SandboxInfo:
+        """Wake a sandbox and wait until it is running.
+
+        No-op if the sandbox is already running.
+
+        Raises:
+            QirabotTimeoutError: If the sandbox does not reach 'running' within the timeout.
+        """
         info = self.get(sandbox_id)
         if info.status == "running":
             return info
-        resp = self._transport.post(f"/sandboxes/{sandbox_id}/wake")
-        return SandboxInfo.from_dict(resp)
+        if info.status != "pending":
+            self._transport.post(f"/sandboxes/{sandbox_id}/wake")
+        return self._wait_status(sandbox_id, "running", timeout, poll_interval)
 
-    def sleep(self, sandbox_id: str) -> SandboxInfo:
-        """Put a sandbox to sleep. No-op if already sleeping."""
+    def sleep(
+        self,
+        sandbox_id: str,
+        timeout: float = 120.0,
+        poll_interval: float = 3.0,
+    ) -> SandboxInfo:
+        """Put a sandbox to sleep and wait until it is sleeping.
+
+        No-op if the sandbox is already sleeping.
+
+        Raises:
+            QirabotTimeoutError: If the sandbox does not reach 'sleeping' within the timeout.
+        """
         info = self.get(sandbox_id)
         if info.status == "sleeping":
             return info
-        resp = self._transport.post(f"/sandboxes/{sandbox_id}/sleep")
-        return SandboxInfo.from_dict(resp)
+        self._transport.post(f"/sandboxes/{sandbox_id}/sleep")
+        return self._wait_status(sandbox_id, "sleeping", timeout, poll_interval)
+
+    def _wait_status(
+        self,
+        sandbox_id: str,
+        target: str,
+        timeout: float,
+        poll_interval: float,
+    ) -> SandboxInfo:
+        deadline = time.monotonic() + timeout
+        while True:
+            info = self.get(sandbox_id)
+            if info.status == target:
+                return info
+            if info.error_message:
+                raise QirabotTimeoutError(f"Sandbox {sandbox_id} entered error state: {info.error_message}")
+            if time.monotonic() >= deadline:
+                raise QirabotTimeoutError(
+                    f"Sandbox {sandbox_id} did not reach '{target}' within {timeout}s (current: {info.status})"
+                )
+            time.sleep(poll_interval)
 
 
 class Tasks:

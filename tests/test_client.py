@@ -4,7 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from qirabot.actions import Action, DEFAULT_AI_MAX_STEPS
+from qirabot.actions import Action
+from qirabot.exceptions import QirabotTimeoutError
 from qirabot.client import (
     DeviceInfo,
     Devices,
@@ -169,6 +170,9 @@ class TestSandboxesList:
         transport.request.assert_called_once_with("GET", "/sandboxes/sb1")
 
 
+SANDBOX_PENDING = {**SANDBOX_RUNNING, "status": "pending"}
+
+
 class TestSandboxWakeIdempotent:
     def test_wake_already_running_skips_post(self):
         transport = MagicMock()
@@ -178,14 +182,36 @@ class TestSandboxWakeIdempotent:
         assert result.status == "running"
         transport.post.assert_not_called()
 
-    def test_wake_sleeping_calls_post(self):
+    def test_wake_sleeping_calls_post_and_polls(self):
         transport = MagicMock()
-        transport.request.return_value = SANDBOX_SLEEPING
-        transport.post.return_value = SANDBOX_RUNNING
+        transport.request.side_effect = [SANDBOX_SLEEPING, SANDBOX_RUNNING]
         sandboxes = Sandboxes(transport)
-        result = sandboxes.wake("sb1")
+        result = sandboxes.wake("sb1", poll_interval=0)
         assert result.status == "running"
         transport.post.assert_called_once_with("/sandboxes/sb1/wake")
+
+    def test_wake_pending_skips_post_and_polls(self):
+        transport = MagicMock()
+        transport.request.side_effect = [SANDBOX_PENDING, SANDBOX_RUNNING]
+        sandboxes = Sandboxes(transport)
+        result = sandboxes.wake("sb1", poll_interval=0)
+        assert result.status == "running"
+        transport.post.assert_not_called()
+
+    def test_wake_timeout(self):
+        transport = MagicMock()
+        transport.request.return_value = SANDBOX_SLEEPING
+        sandboxes = Sandboxes(transport)
+        with pytest.raises(QirabotTimeoutError):
+            sandboxes.wake("sb1", timeout=0, poll_interval=0)
+
+    def test_wake_error_state(self):
+        transport = MagicMock()
+        error_sandbox = {**SANDBOX_SLEEPING, "errorMessage": "boot failed"}
+        transport.request.side_effect = [SANDBOX_SLEEPING, error_sandbox]
+        sandboxes = Sandboxes(transport)
+        with pytest.raises(QirabotTimeoutError, match="boot failed"):
+            sandboxes.wake("sb1", poll_interval=0)
 
 
 class TestSandboxSleepIdempotent:
@@ -197,11 +223,17 @@ class TestSandboxSleepIdempotent:
         assert result.status == "sleeping"
         transport.post.assert_not_called()
 
-    def test_sleep_running_calls_post(self):
+    def test_sleep_running_calls_post_and_polls(self):
         transport = MagicMock()
-        transport.request.return_value = SANDBOX_RUNNING
-        transport.post.return_value = SANDBOX_SLEEPING
+        transport.request.side_effect = [SANDBOX_RUNNING, SANDBOX_SLEEPING]
         sandboxes = Sandboxes(transport)
-        result = sandboxes.sleep("sb1")
+        result = sandboxes.sleep("sb1", poll_interval=0)
         assert result.status == "sleeping"
         transport.post.assert_called_once_with("/sandboxes/sb1/sleep")
+
+    def test_sleep_timeout(self):
+        transport = MagicMock()
+        transport.request.return_value = SANDBOX_RUNNING
+        sandboxes = Sandboxes(transport)
+        with pytest.raises(QirabotTimeoutError):
+            sandboxes.sleep("sb1", timeout=0, poll_interval=0)
